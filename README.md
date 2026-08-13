@@ -50,13 +50,13 @@ cs-training.csv → EDA → WoE Preprocessing → 4 Models + Tuning → Isolatio
 ## Dashboard Previews
 
 ### Page 1: Portfolio Overview
-![Portfolio Overview](reports/eda/class_distribution.png)
+![Portfolio Overview](assets/dashboard_page1.png)
 
 ### Page 2: Borrower Risk Assessment
-![Borrower Assessment](reports/score_distribution.png)
+![Borrower Assessment](assets/dashboard_page2.png)
 
 ### Page 3: Model Performance
-![Model Performance](reports/roc_curves.png)
+![Model Performance](assets/dashboard_page3.png)
 
 ### Page 4: Fraud Risk Monitor
-![Fraud Monitor](reports/ks_plot.png)
+![Fraud Monitor](assets/dashboard_page4.png)
