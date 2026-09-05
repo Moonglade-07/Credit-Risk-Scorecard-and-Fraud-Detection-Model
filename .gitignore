@@ -5,8 +5,23 @@ data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+# Runtime artifacts required by the Streamlit dashboard
+!data/processed/test_raw.csv
+!data/processed/test_woe.csv
+!data/processed/test_with_fraud.csv
+!data/processed/woe_mappings.pkl
+!data/processed/cap_bounds.pkl
 models/*
 !models/.gitkeep
+!models/logistic_regression.pkl
+!models/xgboost_tuned.pkl
+!models/isolation_forest.pkl
 reports/*
 !reports/.gitkeep
+!reports/model_comparison.json
+!reports/fraud_analysis.json
+!reports/feature_importance_xgb.png
+!reports/roc_curves.png
+!reports/calibration_curve.png
+!reports/confusion_matrices.png
 .DS_Store

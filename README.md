@@ -29,6 +29,19 @@ cs-training.csv → EDA → WoE Preprocessing → 4 Models + Tuning → Isolatio
    streamlit run dashboard/app.py
    ```
 
+## Deploy on Streamlit Community Cloud
+
+1. Push this repository to GitHub. The generated dashboard artifacts listed in
+   `.gitignore` must be committed because the deployed app does not run the
+   training pipeline automatically.
+2. Open [share.streamlit.io](https://share.streamlit.io/) and create a new app.
+3. Select this repository and branch, set **Main file path** to
+   `dashboard/app.py`, and deploy.
+
+The dashboard uses repository-relative paths, so no environment variables are
+required for the standard deployment. To rebuild the models, run the pipeline
+locally and push the updated artifacts before redeploying.
+
 ## Key Concepts
 
 - **WoE (Weight of Evidence)**: A technique to transform features to have a linear relationship with the log odds of the target, widely used in credit risk modeling.

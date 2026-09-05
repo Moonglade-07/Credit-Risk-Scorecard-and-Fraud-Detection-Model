@@ -22,7 +22,8 @@ def load_models():
     xgb = joblib.load(models_path / 'xgboost_tuned.pkl')
     iso_forest = joblib.load(models_path / 'isolation_forest.pkl')
     woe_mappings = joblib.load(processed_data_path / 'woe_mappings.pkl')
-    return lr, xgb, iso_forest, woe_mappings
+    cap_bounds = joblib.load(processed_data_path / 'cap_bounds.pkl')
+    return lr, xgb, iso_forest, woe_mappings, cap_bounds
 
 @st.cache_data
 def load_data():
@@ -33,7 +34,15 @@ def load_data():
         model_metrics = json.load(f)
     return test_df_raw, test_df_woe, test_fraud, model_metrics
 
-def convert_to_score(prob: float, offset: float = 600, factor: float = 28.8539) -> float:
+# PDO=40 calibration: factor = 40/ln(2) = 57.708
+# At dataset mean default rate (6.68%) -> score 660
+# At best model output (~0.5% PD)      -> score ~813 (Green)
+# At high risk (20% PD)                -> score ~588 (Orange)
+# At subprime (80% PD)                 -> score ~428 (Red)
+PDO_FACTOR = 40 / np.log(2)   # 57.708
+PDO_OFFSET = 507.8
+
+def convert_to_score(prob: float, offset: float = PDO_OFFSET, factor: float = PDO_FACTOR) -> float:
     prob = np.clip(prob, 1e-10, 1 - 1e-10)
     odds_good = (1 - prob) / prob
     score = offset + factor * np.log(odds_good)
@@ -50,7 +59,7 @@ st.sidebar.title("🏦 Credit Risk System")
 page = st.sidebar.radio("Navigate", ["Portfolio Overview", "Borrower Risk Assessment", "Model Performance", "Fraud Risk Monitor"])
 
 try:
-    lr, xgb, iso_forest, woe_mappings = load_models()
+    lr, xgb, iso_forest, woe_mappings, cap_bounds = load_models()
     test_df_raw, test_df_woe, test_fraud, model_metrics = load_data()
 except Exception as e:
     st.error("Data or models not found. Please run the pipeline first to generate the models and data.")
@@ -137,53 +146,89 @@ elif page == "Borrower Risk Assessment":
             'NumberOfTime60-89DaysPastDueNotWorse': dpd_60_89,
             'NumberOfDependents': dependents
         }])
-        
-        woe_data = input_data.copy()
-        for feature in input_data.columns:
-            edges = woe_mappings[feature]['edges']
+
+        # Step 1: Apply training-time outlier caps so inference matches training exactly
+        capped_data = input_data.copy()
+        for feature, bounds in cap_bounds.items():
+            if bounds is not None and feature in capped_data.columns:
+                lower, upper = bounds
+                capped_data[feature] = np.clip(capped_data[feature], lower, upper)
+
+        # Step 2: WoE encode using saved mappings (include_lowest=True avoids boundary NaNs)
+        woe_data = capped_data.copy()
+        woe_values = {}
+        for feature in capped_data.columns:
+            edges   = woe_mappings[feature]['edges']
             woe_map = woe_mappings[feature]['woe_map']
-            bin_idx = pd.cut(woe_data[feature], bins=edges)
-            woe_data[feature] = bin_idx.map(woe_map).astype(float).fillna(0)
-            
-        prob = lr.predict_proba(woe_data)[0, 1]
+            binned  = pd.cut(capped_data[feature], bins=edges, include_lowest=True)
+            woe_val = binned.map(woe_map).astype(float).fillna(0.0)
+            woe_data[feature] = woe_val
+            woe_values[feature] = float(woe_val.iloc[0])
+
+        # Step 3: Predict
+        prob  = lr.predict_proba(woe_data)[0, 1]
         score = convert_to_score(prob)
         band_text, band_color = determine_risk_band(score)
-        
+
+        # Step 4: Fraud check
         fraud_features = [
             'RevolvingUtilizationOfUnsecuredLines', 'NumberOfTimes90DaysLate',
             'NumberOfTime30-59DaysPastDueNotWorse', 'NumberOfTime60-89DaysPastDueNotWorse', 'DebtRatio'
         ]
         is_fraud = iso_forest.predict(input_data[fraud_features])[0] == -1
-        
+
         el = prob * 0.45 * loan_amount
-        
+
         st.divider()
         col1, col2, col3 = st.columns(3)
         col1.metric("Credit Score", f"{int(score)}", delta=band_text, delta_color="off")
         col2.metric("Probability of Default (PD)", f"{prob*100:.2f}%")
         col3.metric("Expected Loss (EL)", f"${el:.2f}")
-        
+
         st.markdown(f"### Recommendation: <span style='color:{band_color}'>{band_text}</span>", unsafe_allow_html=True)
         if is_fraud:
-            st.error("🚨 HIGH FRAUD RISK DETECTED by Isolation Forest")
-            
-        st.subheader("SHAP Values (XGBoost)")
+            st.error("\U0001f6a8 HIGH FRAUD RISK DETECTED by Isolation Forest")
+
+        # Step 5: Score Factor Breakdown — shows which features helped/hurt the score
+        st.subheader("Score Factor Breakdown")
+        lr_coef = dict(zip(woe_data.columns, lr.coef_[0]))
+        factor_contributions = []
+        for feat, woe_v in woe_values.items():
+            coef = lr_coef.get(feat, 0)
+            # Contribution to log-odds (positive = lowers default risk = raises score)
+            contribution = -coef * woe_v  # negative because higher prob = lower score
+            factor_contributions.append({
+                'Feature': feat,
+                'WoE Value': round(woe_v, 4),
+                'Score Impact': round(contribution * PDO_FACTOR, 1),
+                'Effect': '\u25b2 Positive' if contribution >= 0 else '\u25bc Negative'
+            })
+        factors_df = pd.DataFrame(factor_contributions).sort_values('Score Impact', ascending=False)
+        st.dataframe(
+            factors_df.style.applymap(
+                lambda v: 'color: #2ecc71' if '\u25b2' in str(v) else ('color: #e74c3c' if '\u25bc' in str(v) else ''),
+                subset=['Effect']
+            ),
+            use_container_width=True
+        )
+
+        st.subheader("SHAP Values (XGBoost — Risk Driver Analysis)")
         import shap
-        explainer = shap.TreeExplainer(xgb)
-        shap_vals = explainer.shap_values(woe_data)
-        
-        # Determine format of shap values based on version/model output
-        shap_array = shap_vals[0] if isinstance(shap_vals, list) or (isinstance(shap_vals, np.ndarray) and len(shap_vals.shape) > 1 and shap_vals.shape[0] == 1) else shap_vals
+        explainer  = shap.TreeExplainer(xgb)
+        shap_vals  = explainer.shap_values(woe_data)
+        shap_array = shap_vals[0] if isinstance(shap_vals, list) or (
+            isinstance(shap_vals, np.ndarray) and len(shap_vals.shape) > 1 and shap_vals.shape[0] == 1
+        ) else shap_vals
         if isinstance(shap_array, np.ndarray) and len(shap_array.shape) > 1:
             shap_array = shap_array[0]
-            
         fig = go.Figure(go.Waterfall(
             orientation="h",
             measure=["relative"] * len(woe_data.columns) + ["total"],
-            y=list(woe_data.columns) + ["Total Score"],
-            x=list(shap_array) + [sum(shap_array)],
+            y=list(woe_data.columns) + ["Total"],
+            x=list(shap_array) + [float(sum(shap_array))],
             textposition="outside"
         ))
+        fig.update_layout(title="SHAP Waterfall (positive = higher default risk)")
         st.plotly_chart(fig, use_container_width=True)
 
 elif page == "Model Performance":

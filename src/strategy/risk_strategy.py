@@ -15,7 +15,11 @@ def setup_directories() -> tuple[Path, Path, Path]:
     reports_path = project_root / 'reports'
     return processed_data_path, models_path, reports_path
 
-def convert_to_score(prob: np.ndarray, offset: float = 600, factor: float = 28.8539) -> np.ndarray:
+_PDO_FACTOR = 40 / np.log(2)  # 57.708 — PDO=40
+_PDO_OFFSET = 507.8
+
+def convert_to_score(prob: np.ndarray, offset: float = _PDO_OFFSET, factor: float = _PDO_FACTOR) -> np.ndarray:
+    """PDO=20 calibration. At dataset mean default rate (6.68%), score = 660."""
     prob = np.clip(prob, 1e-10, 1 - 1e-10)
     odds_good = (1 - prob) / prob
     score = offset + factor * np.log(odds_good)

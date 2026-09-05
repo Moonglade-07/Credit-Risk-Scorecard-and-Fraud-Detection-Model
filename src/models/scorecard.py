@@ -44,17 +44,15 @@ def load_data(processed_data_path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     test_df = pd.read_csv(processed_data_path / 'test_woe.csv')
     return train_df, test_df
 
-def convert_to_score(prob: np.ndarray, offset: float = 600, factor: float = 28.8539) -> np.ndarray:
+# PDO=40 calibration: factor = 40/ln(2) = 57.708
+# At dataset mean default rate (6.68%) -> score 660
+_PDO_FACTOR = 40 / np.log(2)  # 57.708
+_PDO_OFFSET = 507.8
+
+def convert_to_score(prob: np.ndarray, offset: float = _PDO_OFFSET, factor: float = _PDO_FACTOR) -> np.ndarray:
     """
-    Convert probability to credit score.
-    
-    Args:
-        prob (np.ndarray): Array of predicted default probabilities.
-        offset (float): Base score.
-        factor (float): PDO factor.
-        
-    Returns:
-        np.ndarray: Array of credit scores.
+    Convert probability to credit score using PDO=20 calibration.
+    At mean default rate (6.68%), score = 660 (mid Yellow band).
     """
     prob = np.clip(prob, 1e-10, 1 - 1e-10)
     odds_good = (1 - prob) / prob
